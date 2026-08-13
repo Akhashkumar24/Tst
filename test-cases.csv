@@ -1,0 +1,110 @@
+Issue Key,Issue ID,Issue Type,Summary,Priority,Assignee,Reporter,Description,Component,Test Type,Precondition type,Action,Data,Expected Result,Labels
+ODH-20910,TC-01,Test,Verify a valid GSE event is replicated verbatim from EMH to ODH shared MSK,High,,,"Confirm the Kafka Client replication Lambda consumes a record from the EMH source topic and re-publishes it to the matching ODH shared MSK topic without any transformation.",ODH-Airport2030,Manual,"1. AC VPN / bastion access into ODH VPC (UAT).
+2. Kafka client configured with SASL/SCRAM+TLS (port 9096) creds for EMH (ac-emh-nonprod) and shared MSK (ac-ops-dig-sha-msk-uat-cac1).
+3. Replication Lambda ac-odh-lcz-gse-event-repl-uat-cac1 deployed and enabled.
+4. CloudWatch Logs access for the replication Lambda.","1. Produce one valid gse payload to EMH topic ADVEEZ-GSE-UAT.
+2. Consume from destination topic emh-dev.ADVEEZ-GSE-UAT.
+3. Compare source vs destination record.
+4. Check replication Lambda CloudWatch logs.","Valid gse payload (asset_id BLW431T, site_iata YYZ)","Record appears on emh-dev.ADVEEZ-GSE-UAT with identical value; Lambda runs with no error; logs show the record processed with correlation id.",ODH_GSE_Event_Replication
+ODH-20910,TC-02,Test,Verify all four feeds (gse/event/maintenance/metric) replicate to their matching destination topics,High,,,"Confirm one dedicated replication Lambda per feed copies records to the correct destination topic for every channel.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.
+3. All four replication Lambdas ac-odh-lcz-{gse,event,mtc,metric}-event-repl-uat-cac1 enabled.","1. Produce one valid payload to each EMH topic ADVEEZ-{GSE,EVENT,MAINTENANCE,METRIC}-UAT.
+2. Consume from each destination topic emh-dev.ADVEEZ-{GSE,EVENT,MAINTENANCE,METRIC}-UAT.
+3. Verify each record landed on the correct destination topic only.","One valid payload per feed","Each feed's record is replicated to only its matching destination topic; no cross-topic leakage; all four Lambdas succeed.",ODH_GSE_Event_Replication
+ODH-20910,TC-03,Test,Verify the message value is replicated byte-for-byte (no transform/filter),High,,,"Replication must copy the record value verbatim; the base64-encoded payload must be identical on source and destination.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce a gse record to ADVEEZ-GSE-UAT and capture its raw value bytes.
+2. Consume the replicated record from emh-dev.ADVEEZ-GSE-UAT and capture its raw value bytes.
+3. Byte-compare the two values.","Any valid gse payload","Destination value is byte-for-byte identical to source value (no re-encoding, trimming, or reformatting).",ODH_GSE_Event_Replication
+ODH-20910,TC-04,Test,Verify the message key is preserved during replication,Medium,,,"Confirm the Kafka record key is copied unchanged so partition/asset keying is preserved end to end.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce a keyed record to ADVEEZ-GSE-UAT (key = asset_id).
+2. Consume from emh-dev.ADVEEZ-GSE-UAT.
+3. Compare source and destination keys.","gse record with key = BLW431T","Destination record key equals source key exactly.",ODH_GSE_Event_Replication
+ODH-20910,TC-05,Test,Verify existing Kafka headers are propagated unchanged,Medium,,,"Any header present on the source record must be copied unchanged to the destination record.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client that can set custom headers.","1. Produce a record to ADVEEZ-GSE-UAT with a custom header (e.g. x-test-header=abc).
+2. Consume from emh-dev.ADVEEZ-GSE-UAT.
+3. Inspect destination headers.","gse record + header x-test-header=abc","All source headers are present unchanged on the destination record.",ODH_GSE_Event_Replication
+ODH-20910,TC-06,Test,Verify a ULID x-correlation-id header is injected when absent on the source record,High,,,"When correlationId feature is enabled and no header exists, the replication Lambda must attach a monotonic ULID as the x-correlation-id header (single mint point).",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. correlationId feature enabled on the replication Lambda (config change confirmed).
+3. Kafka client with EMH + shared MSK creds.","1. Produce a record to ADVEEZ-GSE-UAT WITHOUT an x-correlation-id header.
+2. Consume from emh-dev.ADVEEZ-GSE-UAT.
+3. Inspect the x-correlation-id header on the destination record.","gse record, no correlation header","Destination record carries a new x-correlation-id header whose value is a valid 26-char ULID.",ODH_GSE_Event_Replication
+ODH-20910,TC-07,Test,Verify an existing x-correlation-id header is propagated (not overwritten),High,,,"If the source record already carries x-correlation-id, the replication Lambda must propagate it unchanged rather than mint a new one.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. correlationId feature enabled (propagate-if-present).
+3. Kafka client that can set headers.","1. Produce a record to ADVEEZ-GSE-UAT WITH x-correlation-id=01J... (known ULID).
+2. Consume from emh-dev.ADVEEZ-GSE-UAT.
+3. Compare the header value.","gse record + x-correlation-id=01JKNOWNULID000000000000000","Destination x-correlation-id equals the supplied value exactly (unchanged).",ODH_GSE_Event_Replication
+ODH-20910,TC-08,Test,Verify the same correlation id is shared across a record's downstream pipelines,Medium,,,"Because each feed topic is written once by its replication Lambda, all downstream ingestion pipelines (RDS/OpenSearch/Timestream) read the same correlation id.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. DBeaver access to OperationsDataMart (AirportOperationsDataStore).
+3. correlationId feature enabled.","1. Produce a gse record without a correlation header.
+2. Capture the injected x-correlation-id from emh-dev.ADVEEZ-GSE-UAT.
+3. After ingestion, query RDS row for that asset and read RecordCorrelationId.","gse record for a unique asset_id","RecordCorrelationId stored in RDS equals the ULID injected at replication.",ODH_GSE_Event_Replication
+ODH-20910,TC-09,Test,Verify each replication Lambda uses its own dedicated consumer group,Medium,,,"Each feed's Lambda must consume with consumer group <lambda-name>-cg so offsets are independent per feed.",ODH-Airport2030,Manual,"1. AWS access to the ops-dig shared-MSK account (UAT).
+2. Kafka admin tooling or MSK console to list consumer groups.","1. List consumer groups on the shared MSK cluster.
+2. Confirm one group per replication Lambda named <lambda-name>-cg.","Consumer group naming pattern ac-odh-lcz-*-event-repl-uat-cac1-cg","Four distinct consumer groups exist, one per feed, matching the <lambda-name>-cg pattern.",ODH_GSE_Event_Replication
+ODH-20910,TC-10,Test,Verify offset commit and resume after Lambda restart (no loss / no full re-replay),Medium,,,"After the Lambda restarts, consumption resumes from the last committed offset; no records are lost and there is no mass re-replication.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Ability to disable/enable the Lambda's event source mapping.","1. Produce records to ADVEEZ-GSE-UAT.
+2. Disable the ESM mid-flow, then re-enable it.
+3. Produce more records.
+4. Compare source vs destination record counts.","A sequence of numbered gse records","All records are replicated exactly; consumption resumes from last committed offset with no loss.",ODH_GSE_Event_Replication
+ODH-20910,TC-11,Test,Verify no functional change to RDS ingestion after MirrorMaker to Kafka Client migration (regression),High,,,"Core acceptance criterion: switching from MirrorMaker to Kafka Client must not change RDS ingestion behaviour or output.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. DBeaver access to OperationsDataMart.
+3. Kafka client with EMH creds.","1. Produce a known gse record to ADVEEZ-GSE-UAT.
+2. Wait for end-to-end flow.
+3. Query the Vehicle row in AirportOperationsDataStore.
+4. Confirm fields match the source event and approved mappings.","Valid gse payload for asset BLW431T","Vehicle row is created/updated with correctly mapped fields exactly as before migration; no regression.",ODH_GSE_Event_Replication
+ODH-20910,TC-12,Test,Verify events flow successfully end to end from EMH to ODH infrastructure,High,,,"Acceptance criterion: events produced on EMH topics reach ODH downstream stores through the replicated topics.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client + DBeaver access.","1. Produce one record on each EMH feed topic.
+2. Verify each appears on the destination shared MSK topic.
+3. Verify downstream RDS reflects the ingested data.","One valid payload per feed","Every produced event is observed on the destination topic and reflected in the downstream store.",ODH_GSE_Event_Replication
+ODH-20910,TC-13,Test,Negative: verify a malformed (non-JSON) source record is still replicated verbatim,Medium,,,"Replication performs no validation/transform, so even a malformed value must be copied verbatim (validation is a downstream ingestion concern, not replication).",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce a record with a non-JSON / corrupt value to ADVEEZ-GSE-UAT.
+2. Consume from emh-dev.ADVEEZ-GSE-UAT.
+3. Compare values.","Corrupt value e.g. ""%%%not-base64-json%%%""","Malformed record is replicated byte-for-byte to the destination; replication Lambda does not reject or drop it.",ODH_GSE_Event_Replication
+ODH-20910,TC-14,Test,Negative: verify a record that cannot be produced to the destination is retried and routed to the DLQ,High,,,"When the destination produce fails after the retry budget is exhausted, the record must land on the Lambda's SQS DLQ (no silent loss).",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Ability to simulate a destination produce failure (e.g. revoke destination topic write / invalid ACL in a controlled test).
+3. SQS access to the replication Lambda DLQ.","1. Force destination produce failures for the gse replication Lambda.
+2. Produce records to ADVEEZ-GSE-UAT.
+3. Inspect the Lambda's SQS DLQ and CloudWatch error logs.","Valid gse records during a simulated destination outage","Failed records are captured in the Lambda's SQS DLQ after retries; errors logged; no records silently dropped.",ODH_GSE_Event_Replication
+ODH-20910,TC-15,Test,Poison: verify a persistently failing record blocks only itself and is DLQ'd without stalling the feed indefinitely,Medium,,,"A record that repeatedly fails processing must ultimately be routed to the DLQ so the partition can progress.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. SQS access to the replication Lambda DLQ.","1. Introduce a poison record that consistently fails to replicate.
+2. Follow with several valid records on the same topic.
+3. Observe DLQ and destination topic.","1 poison record + 5 valid records","Poison record ends up in the DLQ; the subsequent valid records are still replicated; the feed does not stall permanently.",ODH_GSE_Event_Replication
+ODH-20910,TC-16,Test,Race: verify a high-volume burst is replicated with no loss and no duplication beyond at-least-once,High,,,"Under a burst load the Kafka Client replication must keep up (or lag then drain) while preserving all records.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client able to produce in bulk.
+3. CloudWatch access to the lag metric.","1. Produce a burst of N records (e.g. 5000) to ADVEEZ-GSE-UAT.
+2. Consume all records from emh-dev.ADVEEZ-GSE-UAT.
+3. Compare source vs destination counts and monitor consumer lag.","5000 sequentially numbered gse records","All N records are replicated (count matches); lag rises then drains to zero; no loss.",ODH_GSE_Event_Replication
+ODH-20910,TC-17,Test,Race: verify per-partition ordering is preserved during concurrent multi-partition replication,Medium,,,"Records on the same partition (same asset key) must be replicated in source order.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce ordered records for the same asset_id (key) to ADVEEZ-GSE-UAT.
+2. Simultaneously produce records for other assets.
+3. Consume destination and check ordering per key.","Ordered records key=BLW431T seq 1..10 + other-asset traffic","For each key, destination record order matches source order (per-partition ordering preserved).",ODH_GSE_Event_Replication
+ODH-20910,TC-18,Test,Race: verify a duplicate source delivery is handled per the at-least-once contract,Medium,,,"If the same source record is delivered twice, replication may produce a duplicate; confirm behaviour is consistent and correlation handling is correct (existing header propagated, or fresh ULID for a genuinely new record).",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce the same record twice to ADVEEZ-GSE-UAT (same payload).
+2. Consume from emh-dev.ADVEEZ-GSE-UAT.
+3. Inspect the correlation headers of both replicated copies.","Two identical gse records","Behaviour matches the at-least-once + propagate-if-present contract; if source header present it is preserved on both; downstream convergence is not broken.",ODH_GSE_Event_Replication
+ODH-20910,TC-19,Test,Verify the correct topic mapping per environment,Medium,,,"Source ADVEEZ-*-UAT on EMH must map to destination emh-dev.ADVEEZ-*-UAT on the shared cluster (non-prod prefix), never the prod msk-ca-region prefix.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce to each ADVEEZ-*-UAT source topic.
+2. Verify records appear only on the emh-dev.ADVEEZ-*-UAT destination topics.
+3. Confirm no records appear on any msk-ca-region.* topic.","One record per feed","Records land only on emh-dev.ADVEEZ-*-UAT destination topics; prod-prefixed topics are untouched.",ODH_GSE_Event_Replication
+ODH-20910,TC-20,Test,Verify the consumer lag metric and lag alarm behave correctly,Medium,,,"A lag metric must be emitted per replication Lambda and the alarm (lag > 1000) must fire and route to the replication SNS topic.",ODH-Airport2030,Manual,"1. AWS CloudWatch access (ops-dig shared-MSK UAT account).
+2. Ability to induce lag (pause ESM or produce a large burst).","1. Pause the gse replication ESM and produce > 1000 records, or generate a large burst.
+2. Observe the lag metric in CloudWatch.
+3. Confirm the lag alarm transitions to ALARM and notifies the SNS topic.","> 1000 backlog records","Lag metric reflects the backlog; alarm fires at the >1000 threshold and notifies ac-odh-gse-event-repl-alarms-uat.",ODH_GSE_Event_Replication
+ODH-20910,TC-21,Test,Verify replication uses SASL/SCRAM + TLS on both source and destination clusters,Medium,,,"Security: EMH and shared MSK connections must use SASL/SCRAM authentication over TLS (port 9096); no plaintext.",ODH-Airport2030,Manual,"1. AWS access to the replication Lambda configuration and MSK cluster settings.
+2. CloudWatch logs access.","1. Review the replication Lambda connection config / MSK client properties.
+2. Confirm SASL/SCRAM + TLS is enforced on port 9096 for both clusters.
+3. Confirm credentials are sourced from Secrets Manager, not hardcoded.","MSK security config","Both connections use SASL/SCRAM over TLS on 9096; credentials come from Secrets Manager; no plaintext or hardcoded secrets.",ODH_GSE_Event_Replication
+ODH-20910,TC-22,Test,Verify MirrorMaker is fully decommissioned and only the Kafka Client path is active,High,,,"Core acceptance criterion: after migration only the Kafka Client replication should be running; the retired MirrorMaker 2 connector must not also be replicating.",ODH-Airport2030,Manual,"1. AWS access to MSK Connect / the ops-dig shared-MSK account (UAT).
+2. Kafka client to inspect destination topics.","1. Verify no active MirrorMaker 2 connector is running for the ADVEEZ feeds.
+2. Produce a record and confirm it is replicated exactly once by the Kafka Client Lambda (not duplicated by a parallel MirrorMaker).","One gse record","No MirrorMaker connector is active; the record is replicated only by the Kafka Client Lambda (no double replication).",ODH_GSE_Event_Replication
+ODH-20910,TC-23,Test,Verify replication Lambda structured logs contain correlation id and record metadata,Low,,,"Observability: each replicated record should be traceable in CloudWatch via correlation id and topic-partition-offset metadata.",ODH-Airport2030,Manual,"1. CloudWatch Logs access for the replication Lambda.
+2. Kafka client with EMH creds.","1. Produce a record to ADVEEZ-GSE-UAT.
+2. Open the replication Lambda log group.
+3. Locate the log entry for the record.","One gse record","Log entry includes the correlation id and topic-partition-offset metadata; no sensitive payload/PII is logged unless explicitly flagged on.",ODH_GSE_Event_Replication
+ODH-20910,TC-24,Test,Negative: verify a record on an unexpected/unsubscribed EMH topic is not replicated,Low,,,"The replication Lambda must only consume its configured source topic; records on other topics must not be replicated by it.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce a record to an EMH topic not mapped for replication.
+2. Verify it does not appear on any emh-dev.ADVEEZ-*-UAT destination topic.","Record on an unmapped topic","The record is not replicated to any destination ADVEEZ topic.",ODH_GSE_Event_Replication
+ODH-20910,TC-25,Test,"Verify alive heartbeat records are replicated verbatim (filtering happens at ingestion, not replication)",Low,,,"Replication copies every record verbatim, including channel=alive; the alive drop is a downstream ingestion behaviour, not a replication filter.",ODH-Airport2030,Manual,"1. AC VPN / bastion into ODH VPC (UAT).
+2. Kafka client with EMH + shared MSK creds.","1. Produce an alive heartbeat payload to the appropriate EMH source topic.
+2. Consume from the matching emh-dev destination topic.
+3. Confirm the alive record is present verbatim.","alive heartbeat payload (channel=alive)","The alive record is replicated verbatim to the destination topic (not filtered at the replication layer).",ODH_GSE_Event_Replication
